@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 
 import path from 'path';
+import fs from 'fs';
 
 // Import route modules
 import authRoutes from './routes/authRoutes.js';
@@ -18,16 +19,40 @@ const app = express();
 // Global Middlewares
 // -----------------------------------------------------------------------------
 
+// Allowed frontend origins for Cross-Origin Resource Sharing (CORS)
+const allowedOrigins = [
+  'https://edunotesrcpit.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 // Enable Cross-Origin Resource Sharing (CORS)
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, mobile apps, server-to-server)
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.vercel.app') ||
+        process.env.NODE_ENV !== 'production'
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  })
+);
 
 // Parse incoming JSON requests
 app.use(express.json());
 
 // Parse incoming URL-encoded bodies
 app.use(express.urlencoded({ extended: true }));
-
-import fs from 'fs';
 
 // Serve static frontend assets from built React frontend
 const frontendDist = path.resolve(process.cwd(), '../frontend/dist');
@@ -51,6 +76,8 @@ const getApiInfo = (req, res) => {
       users: '/api/users',
       health: '/api/health',
     },
+    clientUrl: process.env.CLIENT_URL || 'https://edunotesrcpit.vercel.app',
+    backendUrl: process.env.BACKEND_URL || 'https://college-notes-sharing-platform-backend-6wdi.onrender.com',
   });
 };
 
