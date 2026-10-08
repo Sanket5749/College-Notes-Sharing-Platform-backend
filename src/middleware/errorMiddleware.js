@@ -34,31 +34,26 @@ export const errorHandler = (err, req, res, next) => {
     message = 'Authentication token has expired. Please log in again.';
   }
 
-  // Handle Supabase / PostgreSQL specific error codes
-  if (err.code) {
-    switch (err.code) {
-      case '23505': // Unique constraint violation (e.g., duplicate PRN)
-        statusCode = 409;
-        message = 'A record with this information already exists.';
-        if (err.details && err.details.includes('prn')) {
-          message = 'An account with this 9-digit PRN already exists.';
-        }
-        break;
-      case '23503': // Foreign key violation
-        statusCode = 400;
-        message = 'Referenced record does not exist (invalid foreign key).';
-        break;
-      case '22P02': // Invalid text representation (e.g., invalid UUID syntax)
-        statusCode = 400;
-        message = 'Invalid ID format provided.';
-        break;
-      case 'PGRST116': // Supabase query expecting single row found 0
-        statusCode = 404;
-        message = 'Requested resource was not found.';
-        break;
-      default:
-        // Keep standard message or database error message
-        break;
+  // Handle Mongoose Validation Errors
+  if (err.name === 'ValidationError') {
+    statusCode = 400;
+    message = Object.values(err.errors)
+      .map((val) => val.message)
+      .join(', ');
+  }
+
+  // Handle Mongoose CastError (e.g. invalid ObjectId)
+  if (err.name === 'CastError') {
+    statusCode = 400;
+    message = `Invalid format for field: ${err.path}`;
+  }
+
+  // Handle MongoDB duplicate key error (code 11000)
+  if (err.code === 11000) {
+    statusCode = 409;
+    message = 'A record with this information already exists.';
+    if (err.keyPattern && err.keyPattern.prn) {
+      message = 'An account with this 9-digit PRN already exists.';
     }
   }
 

@@ -24,8 +24,12 @@ const allowedOrigins = [
   'https://edunotesrcpit.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://localhost:4173',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:4173',
   process.env.CLIENT_URL,
-].filter(Boolean);
+].filter(Boolean).map((url) => url.replace(/\/+$/, ''));
 
 // Enable Cross-Origin Resource Sharing (CORS)
 app.use(
@@ -33,9 +37,13 @@ app.use(
     origin: (origin, callback) => {
       // Allow requests with no origin (curl, mobile apps, server-to-server)
       if (!origin) return callback(null, true);
+
+      const normalizedOrigin = origin.replace(/\/+$/, '');
+
       if (
-        allowedOrigins.includes(origin) ||
-        origin.endsWith('.vercel.app') ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        normalizedOrigin.endsWith('.vercel.app') ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalizedOrigin) ||
         process.env.NODE_ENV !== 'production'
       ) {
         return callback(null, true);
@@ -54,7 +62,7 @@ app.use(express.json());
 // Parse incoming URL-encoded bodies
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static frontend assets from built React frontend
+// Serve static frontend assets from built React frontend if present
 const frontendDist = path.resolve(process.cwd(), '../frontend/dist');
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
@@ -81,6 +89,7 @@ const getApiInfo = (req, res) => {
   });
 };
 
+app.get('/', getApiInfo);
 app.get('/api/health', getApiInfo);
 app.get('/api', getApiInfo);
 

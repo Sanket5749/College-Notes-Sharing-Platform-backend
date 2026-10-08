@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
-import { supabase } from '../config/supabase.js';
+import { User } from '../models/User.js';
+import { Note } from '../models/Note.js';
 import { generateToken } from '../utils/generateToken.js';
 
 // Regex for strictly 9-digit PRN validation
@@ -49,16 +50,7 @@ export const register = async (req, res, next) => {
     }
 
     // 3. Check if account with this PRN already exists
-    const { data: existingUser, error: prnFindError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('prn', sanitizedPrn)
-      .maybeSingle();
-
-    if (prnFindError) {
-      return next(prnFindError);
-    }
-
+    const existingUser = await User.findOne({ prn: sanitizedPrn });
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -70,36 +62,28 @@ export const register = async (req, res, next) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // 5. Store user in database (purely PRN-based, no email)
-    const { data: newUser, error: insertError } = await supabase
-      .from('users')
-      .insert([
-        {
-          name: trimmedName,
-          prn: sanitizedPrn,
-          password: hashedPassword,
-          role: userRole,
-        },
-      ])
-      .select('id, name, prn, role, created_at')
-      .single();
+    // 5. Store user in MongoDB
+    const newUser = await User.create({
+      name: trimmedName,
+      prn: sanitizedPrn,
+      password: hashedPassword,
+      role: userRole,
+    });
 
-    if (insertError) {
-      return next(insertError);
-    }
-
-    newUser.notes_count = 0;
-    newUser.is_verified = false;
+    const safeUser = newUser.toJSON();
+    delete safeUser.password;
+    safeUser.notes_count = 0;
+    safeUser.is_verified = false;
 
     // 6. Generate JWT token
-    const token = generateToken(newUser.id);
+    const token = generateToken(newUser._id.toString());
 
     // 7. Return response (password is excluded)
     return res.status(201).json({
       success: true,
       message: 'User registered successfully with PRN.',
       data: {
-        user: newUser,
+        user: safeUser,
         token,
       },
     });
@@ -134,17 +118,8 @@ export const login = async (req, res, next) => {
       });
     }
 
-    // Find user in database by 9-digit PRN
-    const { data: user, error: findError } = await supabase
-      .from('users')
-      .select('id, name, prn, password, role, created_at')
-      .eq('prn', rawPrn)
-      .maybeSingle();
-
-    if (findError) {
-      return next(findError);
-    }
-
+    // Find user in MongoDB by 9-digit PRN
+    const user = await User.findOne({ prn: rawPrn });
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -162,18 +137,16 @@ export const login = async (req, res, next) => {
     }
 
     // Generate JWT
-    const token = generateToken(user.id);
+    const token = generateToken(user._id.toString());
 
     // Count user's uploaded notes
-    const { count: userNotesCount } = await supabase
-      .from('notes')
-      .select('id', { count: 'exact', head: true })
-      .eq('uploaded_by', user.id);
+    const userNotesCount = await Note.countDocuments({ uploaded_by: user._id });
 
     // Exclude password before returning response
-    const { password: _, ...safeUser } = user;
-    safeUser.notes_count = userNotesCount || 0;
-    safeUser.is_verified = (userNotesCount || 0) >= 10;
+    const safeUser = user.toJSON();
+    delete safeUser.password;
+    safeUser.notes_count = userNotesCount;
+    safeUser.is_verified = userNotesCount >= 10;
 
     return res.status(200).json({
       success: true,

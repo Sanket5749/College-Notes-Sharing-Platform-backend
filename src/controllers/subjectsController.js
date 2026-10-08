@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { supabase } from '../config/supabase.js';
+import { Subject } from '../models/Subject.js';
 import { ALLOWED_BRANCHES, normalizeBranchName } from '../constants/branches.js';
 import { DEFAULT_SUBJECTS } from '../constants/defaultSubjects.js';
 
@@ -30,6 +30,27 @@ export const getBranches = async (req, res) => {
       branches: ALLOWED_BRANCHES,
     },
   });
+};
+
+/**
+ * Helper to auto-seed default subjects if Subject collection is empty
+ */
+const autoSeedIfEmpty = async () => {
+  try {
+    const count = await Subject.countDocuments();
+    if (count === 0) {
+      const docs = DEFAULT_SUBJECTS_WITH_IDS.map((s) => ({
+        _id: s.id,
+        name: s.name,
+        semester: s.semester,
+        department: s.department,
+      }));
+      await Subject.insertMany(docs, { ordered: false });
+      console.log(`🌱 Auto-seeded ${docs.length} default subjects into MongoDB.`);
+    }
+  } catch (err) {
+    // If concurrent insert happens or already seeded, silently continue
+  }
 };
 
 /**
@@ -67,37 +88,34 @@ export const getSubjects = async (req, res, next) => {
 
     let subjects = [];
 
-    // Attempt querying Supabase
+    // Attempt querying MongoDB
     try {
-      let query = supabase
-        .from('subjects')
-        .select('id, name, semester, department, created_at')
-        .order('semester', { ascending: true })
-        .order('name', { ascending: true });
+      await autoSeedIfEmpty();
+
+      const filter = {};
 
       if (parsedSemester) {
-        query = query.eq('semester', parsedSemester);
+        filter.semester = parsedSemester;
       }
 
       if (targetBranchName) {
-        // If semester is 1 or 2, also include common subjects
         if (!parsedSemester || parsedSemester <= 2) {
-          query = query.or(`department.eq."${targetBranchName}",department.eq."Common Engineering"`);
+          filter.$or = [
+            { department: targetBranchName },
+            { department: 'Common Engineering' },
+          ];
         } else {
-          query = query.eq('department', targetBranchName);
+          filter.department = targetBranchName;
         }
       }
 
-      const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        subjects = data;
-      }
+      subjects = await Subject.find(filter).sort({ semester: 1, name: 1 });
     } catch {
-      // Database not reachable or unseeded, fall back to default subjects below
+      // If MongoDB query encounters an issue, fallback to default subjects
     }
 
     // Fallback: If database is empty or offline, use deterministic standard curriculum
-    if (subjects.length === 0) {
+    if (!subjects || subjects.length === 0) {
       subjects = DEFAULT_SUBJECTS_WITH_IDS.filter((s) => {
         if (parsedSemester && s.semester !== parsedSemester) {
           return false;
@@ -159,19 +177,12 @@ export const createSubject = async (req, res, next) => {
       });
     }
 
-    const { data: subject, error } = await supabase
-      .from('subjects')
-      .insert([
-        {
-          name: name.trim(),
-          semester: parsedSemester,
-          department: normalizedDept,
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) return next(error);
+    const subject = await Subject.create({
+      _id: crypto.randomUUID(),
+      name: name.trim(),
+      semester: parsedSemester,
+      department: normalizedDept,
+    });
 
     return res.status(201).json({
       success: true,
@@ -228,14 +239,7 @@ export const updateSubject = async (req, res, next) => {
       });
     }
 
-    const { data: subject, error } = await supabase
-      .from('subjects')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .maybeSingle();
-
-    if (error) return next(error);
+    const subject = await Subject.findByIdAndUpdate(id, updates, { new: true });
 
     if (!subject) {
       return res.status(404).json({
@@ -265,13 +269,7 @@ export const deleteSubject = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: subject, error: findError } = await supabase
-      .from('subjects')
-      .select('id')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (findError) return next(findError);
+    const subject = await Subject.findByIdAndDelete(id);
 
     if (!subject) {
       return res.status(404).json({
@@ -279,13 +277,6 @@ export const deleteSubject = async (req, res, next) => {
         message: 'Subject not found.',
       });
     }
-
-    const { error: deleteError } = await supabase
-      .from('subjects')
-      .delete()
-      .eq('id', id);
-
-    if (deleteError) return next(deleteError);
 
     return res.status(200).json({
       success: true,
@@ -303,17 +294,18 @@ export const deleteSubject = async (req, res, next) => {
  */
 export const seedSubjects = async (req, res, next) => {
   try {
-    const { data: existing, error: fetchErr } = await supabase
-      .from('subjects')
-      .select('name, semester, department');
-
-    if (fetchErr) return next(fetchErr);
+    const existing = await Subject.find({}).select('name semester department');
 
     const existingSet = new Set((existing || []).map((s) => `${s.name}__${s.semester}__${s.department}`));
 
-    const toInsert = DEFAULT_SUBJECTS.filter(
+    const toInsert = DEFAULT_SUBJECTS_WITH_IDS.filter(
       (s) => !existingSet.has(`${s.name}__${s.semester}__${s.department}`)
-    );
+    ).map((s) => ({
+      _id: s.id,
+      name: s.name,
+      semester: s.semester,
+      department: s.department,
+    }));
 
     if (toInsert.length === 0) {
       return res.status(200).json({
@@ -328,8 +320,7 @@ export const seedSubjects = async (req, res, next) => {
     const batchSize = 50;
     for (let i = 0; i < toInsert.length; i += batchSize) {
       const batch = toInsert.slice(i, i + batchSize);
-      const { error: insertErr } = await supabase.from('subjects').insert(batch);
-      if (insertErr) return next(insertErr);
+      await Subject.insertMany(batch, { ordered: false });
       insertedCount += batch.length;
     }
 

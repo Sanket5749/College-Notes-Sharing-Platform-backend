@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabase.js';
+import { User } from '../models/User.js';
 
 /**
  * @desc    Get all users (Admin only)
@@ -9,22 +9,19 @@ export const getAllUsers = async (req, res, next) => {
   try {
     const { role, prn } = req.query;
 
-    let query = supabase
-      .from('users')
-      .select('id, name, prn, role, created_at')
-      .order('created_at', { ascending: false });
+    const filter = {};
 
     if (role && (role === 'student' || role === 'admin')) {
-      query = query.eq('role', role);
+      filter.role = role;
     }
 
     if (prn) {
-      query = query.eq('prn', prn.trim());
+      filter.prn = prn.trim();
     }
 
-    const { data: users, error } = await query;
-
-    if (error) return next(error);
+    const users = await User.find(filter)
+      .select('-password')
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,

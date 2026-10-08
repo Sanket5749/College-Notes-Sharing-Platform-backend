@@ -4,7 +4,7 @@ import path from 'path';
 // 10 MB maximum file size limit
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-// Use memory storage so we can stream buffer directly to Supabase Storage
+// Use memory storage so we can stream buffer directly to Cloudinary
 const storage = multer.memoryStorage();
 
 /**

@@ -1,5 +1,7 @@
 import jwt from 'jsonwebtoken';
-import { supabase } from '../config/supabase.js';
+import mongoose from 'mongoose';
+import { User } from '../models/User.js';
+import { Note } from '../models/Note.js';
 
 /**
  * Middleware to authenticate requests using a JSON Web Token (JWT).
@@ -7,8 +9,8 @@ import { supabase } from '../config/supabase.js';
  * Flow:
  * 1. Checks for Authorization header formatted as: Bearer <token>
  * 2. Verifies token validity and expiration.
- * 3. Extracts userId and queries database for current user profile (excluding password).
- * 4. Attaches safe user object to req.user.
+ * 3. Extracts userId and queries MongoDB for current user profile (excluding password).
+ * 4. Attaches safe user object to req.user with computed note statistics.
  */
 export const authenticate = async (req, res, next) => {
   try {
@@ -47,21 +49,17 @@ export const authenticate = async (req, res, next) => {
       });
     }
 
-    if (!decoded || !decoded.userId) {
+    if (!decoded || !decoded.userId || !mongoose.Types.ObjectId.isValid(decoded.userId)) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid token payload.',
+        message: 'Invalid or outdated authentication token. Please log in again.',
       });
     }
 
-    // Fetch user details from database (never select password)
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('id, name, prn, role, created_at')
-      .eq('id', decoded.userId)
-      .single();
+    // Fetch user details from MongoDB (exclude password)
+    const user = await User.findById(decoded.userId).select('-password');
 
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: 'The user belonging to this token no longer exists.',
@@ -69,16 +67,14 @@ export const authenticate = async (req, res, next) => {
     }
 
     // Attach note count and verification badge status (10+ uploaded notes)
-    const { count: userNotesCount } = await supabase
-      .from('notes')
-      .select('id', { count: 'exact', head: true })
-      .eq('uploaded_by', user.id);
+    const userNotesCount = await Note.countDocuments({ uploaded_by: user._id });
 
-    user.notes_count = userNotesCount || 0;
-    user.is_verified = (userNotesCount || 0) >= 10;
+    const safeUser = user.toJSON();
+    safeUser.notes_count = userNotesCount;
+    safeUser.is_verified = userNotesCount >= 10;
 
     // Attach authenticated user to request object
-    req.user = user;
+    req.user = safeUser;
     next();
   } catch (error) {
     next(error);
